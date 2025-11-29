@@ -4,10 +4,7 @@ import CardTile from './CardTile';
 export default function TablaGrid({ tabla, marks, currentCardId, onMark }) {
   const size = tabla.length;
   return (
-    <div
-      className="grid-container card-wrapper"
-      style={{ gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))` }}
-    >
+    <div className="grid-container card-wrapper">
       {tabla.flat().map((card, idx) => {
         const row = Math.floor(idx / size);
         const col = idx % size;

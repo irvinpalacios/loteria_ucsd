@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import deckData from './data/deck.json';
 import CallerCard from './components/CallerCard';
 import TablaGrid from './components/TablaGrid';
@@ -8,15 +8,18 @@ import { shuffle } from './utils/shuffle';
 import { createEmptyMarks } from './utils/gameState';
 import { checkPatterns } from './utils/patternCheck';
 
+const TABLA_SIZE = 5;
+
 export default function App() {
-  const [tablaSize, setTablaSize] = useState(4);
   const [tabla, setTabla] = useState([]);
-  const [marks, setMarks] = useState(createEmptyMarks(4));
+  const [marks, setMarks] = useState(createEmptyMarks(TABLA_SIZE));
   const [deckQueue, setDeckQueue] = useState([]);
   const [currentCard, setCurrentCard] = useState(null);
-  const [gameEnded, setGameEnded] = useState(false);
+  const [gameStatus, setGameStatus] = useState('idle'); // idle | playing | won | deck-out
   const [winReady, setWinReady] = useState(false);
   const [showWin, setShowWin] = useState(false);
+  const [winPatterns, setWinPatterns] = useState([]);
+
   const [attempts, setAttempts] = useState(0);
   const [correctMarks, setCorrectMarks] = useState(0);
   const [startTime, setStartTime] = useState(Date.now());
@@ -26,61 +29,57 @@ export default function App() {
   const [bestStreak, setBestStreak] = useState(0);
 
   const accuracy = attempts === 0 ? 100 : Math.round((correctMarks / attempts) * 100);
-  const remaining = deckQueue.length + (currentCard ? 1 : 0);
+  const remaining = deckQueue.length;
 
-  const tablaCards = useMemo(() => shuffle(deckData), []);
-
-  const dealTabla = (size) => {
-    const subset = shuffle(tablaCards).slice(0, size * size);
+  const buildTabla = useCallback(() => {
+    const subset = shuffle(deckData).slice(0, TABLA_SIZE * TABLA_SIZE);
     const matrix = [];
-    for (let i = 0; i < size; i += 1) {
-      matrix.push(subset.slice(i * size, (i + 1) * size));
+    for (let i = 0; i < TABLA_SIZE; i += 1) {
+      matrix.push(subset.slice(i * TABLA_SIZE, (i + 1) * TABLA_SIZE));
     }
     return matrix;
-  };
+  }, []);
 
-  const resetGame = (size = tablaSize) => {
-    const newTabla = dealTabla(size);
-    setTabla(newTabla);
-    setMarks(createEmptyMarks(size));
-    const newDeck = shuffle(deckData);
-    setDeckQueue(newDeck);
+  const resetGame = useCallback(() => {
+    setTabla(buildTabla());
+    setMarks(createEmptyMarks(TABLA_SIZE));
+    setDeckQueue(shuffle(deckData));
     setCurrentCard(null);
-    setAttempts(0);
-    setCorrectMarks(0);
+    setGameStatus('playing');
     setWinReady(false);
     setShowWin(false);
-    setGameEnded(false);
+    setWinPatterns([]);
+    setAttempts(0);
+    setCorrectMarks(0);
     setStartTime(Date.now());
     setTimeElapsed(0);
     setCurrentStreak(0);
     setBestStreak(0);
     setLastCorrectTime(null);
-  };
+  }, [buildTabla]);
 
   useEffect(() => {
-    resetGame(tablaSize);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tablaSize]);
+    resetGame();
+  }, [resetGame]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      if (!gameEnded) {
+      if (gameStatus === 'playing') {
         setTimeElapsed(Math.round((Date.now() - startTime) / 1000));
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, [gameEnded, startTime]);
+  }, [gameStatus, startTime]);
 
   const drawCard = () => {
-    if (deckQueue.length === 0 || gameEnded) return;
+    if (gameStatus !== 'playing' || deckQueue.length === 0) return;
     const [next, ...rest] = deckQueue;
     setCurrentCard(next);
     setDeckQueue(rest);
   };
 
   const handleMark = (row, col, card) => {
-    if (gameEnded) return;
+    if (gameStatus !== 'playing') return;
     setAttempts((prev) => prev + 1);
 
     if (!currentCard || card.id !== currentCard.id || marks[row][col]) {
@@ -107,46 +106,53 @@ export default function App() {
     }
     setLastCorrectTime(now);
 
-    const { hasWin } = checkPatterns(updated, tablaSize);
+    const { hasWin, patterns } = checkPatterns(updated, TABLA_SIZE);
     if (hasWin) {
       setWinReady(true);
-      setGameEnded(true);
-      setShowWin(true);
+      setWinPatterns(patterns);
+      setGameStatus('won');
+    } else if (deckQueue.length === 0) {
+      setCurrentCard(null);
+      setGameStatus('deck-out');
     }
   };
 
   useEffect(() => {
-    if (!gameEnded && remaining === 0) {
-      setGameEnded(true);
+    if (gameStatus === 'playing' && deckQueue.length === 0 && !winReady && !currentCard) {
+      setGameStatus('deck-out');
     }
-  }, [gameEnded, remaining]);
+  }, [gameStatus, deckQueue.length, winReady, currentCard]);
 
-  const stats = {
-    timeElapsed,
-    accuracy,
-    attempts,
-    correctMarks,
-    bestStreak,
-  };
+  const stats = useMemo(
+    () => ({ timeElapsed, accuracy, attempts, correctMarks, currentStreak, bestStreak, remaining }),
+    [timeElapsed, accuracy, attempts, correctMarks, currentStreak, bestStreak, remaining]
+  );
+
+  const statusMessage = {
+    won: '¡Patrón válido encontrado! Presiona el botón para cantar Lotería.',
+    'deck-out': 'El mazo terminó. Vuelve a intentarlo con un nuevo juego.',
+  }[gameStatus];
 
   return (
     <div className="app-shell">
       <header className="top-bar">
-        <CallerCard current={currentCard} remaining={remaining} onNext={drawCard} disabled={gameEnded} />
-        <div className="card-wrapper">
-          <div style={{ fontWeight: 800, marginBottom: 10 }}>Elige tamaño</div>
-          <div className="tabla-size-switch">
-            {[4, 5].map((size) => (
-              <button
-                key={size}
-                className={size === tablaSize ? 'active' : ''}
-                onClick={() => setTablaSize(size)}
-              >
-                {size} × {size}
-              </button>
-            ))}
-            <button className="secondary-button" onClick={() => resetGame(tablaSize)}>
-              Reiniciar
+        <CallerCard
+          current={currentCard}
+          remaining={deckQueue.length}
+          onNext={drawCard}
+          disabled={gameStatus !== 'playing' || deckQueue.length === 0}
+        />
+        <div className="card-wrapper" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div>
+            <div className="label">Tabla</div>
+            <div className="headline">{TABLA_SIZE} × {TABLA_SIZE}</div>
+          </div>
+          <p className="callout">
+            Pulsa “Next Card” para descubrir la siguiente carta y toca las coincidencias en tu tabla.
+          </p>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <button className="secondary-button" onClick={resetGame}>
+              Reiniciar partida
             </button>
           </div>
         </div>
@@ -154,29 +160,25 @@ export default function App() {
 
       <TablaGrid tabla={tabla} marks={marks} currentCardId={currentCard?.id} onMark={handleMark} />
 
-      <ScorePanel
-        timeElapsed={timeElapsed}
-        accuracy={accuracy}
-        attempts={attempts}
-        correctMarks={correctMarks}
-        currentStreak={currentStreak}
-        bestStreak={bestStreak}
-      />
+      <ScorePanel {...stats} deckSize={deckData.length} />
 
       <div className="footer-area">
-        {winReady && !showWin && (
+        {winReady && (
           <button className="loteria-button" onClick={() => setShowWin(true)}>
             ¡Lotería!
           </button>
         )}
-        {!winReady && gameEnded && <div className="callout">El mazo terminó. Intenta otra vez.</div>}
-        <div className="callout">Marca las cartas que coincidan con el caller.</div>
+        {statusMessage && <div className="callout" role="status">{statusMessage}</div>}
+        {!statusMessage && <div className="callout">Marca las cartas que coincidan con el caller.</div>}
       </div>
 
       <WinModal
         visible={showWin}
-        stats={{ ...stats, currentStreak, bestStreak }}
-        onRestart={() => resetGame(tablaSize)}
+        stats={{ ...stats, winPatterns }}
+        onRestart={() => {
+          setShowWin(false);
+          resetGame();
+        }}
       />
     </div>
   );
